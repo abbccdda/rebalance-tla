@@ -3,15 +3,23 @@ EXTENDS Integers
 
 CONSTANT MaxId
 
-CONSTANTS Consumers, Generation
+CONSTANTS Consumers
 \* Group state constants
-CONSTANTS Stable, PrepareRebalance, CompletingRebalance, Dead, Empty
+Stable == 0 
+PrepareRebalance == 1 
+CompletingRebalance == 2
+Dead == 3
+Empty == 4
 \* Member state constants
-CONSTANTS Unjoined, Rebalancing, Working, Fenced
+Unjoined == 5
+Rebalancing == 6
+Working == 7 
+Fenced == 8
 
 ValidGroupStates == {Stable, PrepareRebalance, CompletingRebalance, Dead, Empty}
 ValidMemberStates == {Unjoined, Rebalancing, Stable, Fenced}
 UNKNOWN_MEMBER_ID == 0
+
 
 MemberInfo == [ memberId: 0..MaxId, 
                 state: ValidMemberStates]
@@ -64,13 +72,13 @@ Init == /\ groupState = Empty
 \*        /\ syncGroupCallback = [m \in Consumers |-> False]
         /\ memberIdSeq = UNKNOWN_MEMBER_ID + 1
         /\ allInstances = [m \in Consumers |-> [memberId |-> UNKNOWN_MEMBER_ID, state |-> Unjoined]]
-        
 
-\*MoveToRebalance == (Is(Empty) \/ Is(Stable) \/ Is(CompletingRebalance) \/ Is(PrepareRebalance)) /\ UNCHANGED <<members>> /\ groupState' = PrepareRebalance
-
+doUnknownJoin(m) == /\ groupState' = PrepareRebalance /\ groupMembers' = [groupMembers EXCEPT ![m] = memberIdSeq] 
+/\ memberIdSeq' = memberIdSeq + 1 /\ joinGroupCallback' = [joinGroupCallback EXCEPT ![m] = TRUE] /\ UNCHANGED <<allInstances>>    
+    
 JoinGroupReq(m) == IF (~Is(Dead) /\ ~IsKnownMember(m)) 
-    THEN groupState' = PrepareRebalance /\ groupMembers' = [groupMembers EXCEPT ![m] = memberIdSeq] /\ memberIdSeq' = memberIdSeq + 1
-    ELSE UNCHANGED <<groupState, groupMembers, memberIdSeq>>
+    THEN doUnknownJoin(m)
+    ELSE UNCHANGED <<groupState, groupMembers, memberIdSeq, joinGroupCallback, allInstances>>
     
 \*CompleteJoin == /\ Is(PrepareRebalance) /\
 
@@ -78,5 +86,5 @@ Next ==  \E m \in Consumers : JoinGroupReq(m)
 
 =============================================================================
 \* Modification History
-\* Last modified Mon Jun 17 16:25:28 PDT 2019 by boyang.chen
+\* Last modified Mon Jun 17 17:10:10 PDT 2019 by boyang.chen
 \* Created Mon Jun 10 22:20:01 PDT 2019 by boyang.chen
