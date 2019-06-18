@@ -1,7 +1,7 @@
 ----------------------------- MODULE rebalance -----------------------------
 EXTENDS Integers
 
-CONSTANT MaxId
+CONSTANT MaxId, MaxGeneration
 
 CONSTANTS Consumers
 \* Group state constants
@@ -18,11 +18,13 @@ Fenced == 8
 
 ValidGroupStates == {Stable, PrepareRebalance, CompletingRebalance, Dead, Empty}
 ValidMemberStates == {Unjoined, Rebalancing, Stable, Fenced}
+ValidInstanceIds == {"ins1", "ins2", "ins3"}
 UNKNOWN_MEMBER_ID == 0
 
-
-MemberInfo == [ memberId: 0..MaxId, 
-                state: ValidMemberStates]
+MemberInfo == [ memberId: 0..MaxId,
+                instanceId: ValidInstanceIds, 
+                state: ValidMemberStates,
+                generation: 0..MaxGeneration]
           
 \*MsgType == {JoinGroupRequest, JoinGroupResponse, SyncGroupRequest, SyncGroupResponse, LeaveGroupRequest, LeaveGroupResponse}
 \*Messages == \* message queue containing server client interactions 
@@ -53,6 +55,8 @@ VARIABLES groupState,
 
           groupMembers, \* currently active members within the consumer map
           
+          groupGeneration,
+          
           memberIdSeq, \* the sequence number being assigned for every unknown join group
 
           allInstances,
@@ -71,20 +75,28 @@ Init == /\ groupState = Empty
         /\ joinGroupCallback = [m \in Consumers |-> FALSE]
 \*        /\ syncGroupCallback = [m \in Consumers |-> False]
         /\ memberIdSeq = UNKNOWN_MEMBER_ID + 1
-        /\ allInstances = [m \in Consumers |-> [memberId |-> UNKNOWN_MEMBER_ID, state |-> Unjoined]]
+        /\ allInstances = [m \in Consumers |-> [memberId |-> UNKNOWN_MEMBER_ID, state |-> Unjoined, generation |-> 0, instanceId |-> "ins1"]]
+        /\ groupGeneration = 0
 
 doUnknownJoin(m) == /\ groupState' = PrepareRebalance /\ groupMembers' = [groupMembers EXCEPT ![m] = memberIdSeq] 
-/\ memberIdSeq' = memberIdSeq + 1 /\ joinGroupCallback' = [joinGroupCallback EXCEPT ![m] = TRUE] /\ UNCHANGED <<allInstances>>    
-    
-JoinGroupReq(m) == IF (~Is(Dead) /\ ~IsKnownMember(m)) 
-    THEN doUnknownJoin(m)
-    ELSE UNCHANGED <<groupState, groupMembers, memberIdSeq, joinGroupCallback, allInstances>>
-    
-\*CompleteJoin == /\ Is(PrepareRebalance) /\
+/\ memberIdSeq' = memberIdSeq + 1 /\ joinGroupCallback' = [joinGroupCallback EXCEPT ![m] = TRUE] /\ UNCHANGED <<allInstances, groupGeneration>>    
 
-Next ==  \E m \in Consumers : JoinGroupReq(m)
+JoinResp(m, memberId) == allInstances' = [allInstances EXCEPT ![m] = [memberId |-> memberId, state |-> Rebalancing]] 
+    
+JoinReq(m) == IF (~Is(Dead) /\ ~IsKnownMember(m))
+    THEN doUnknownJoin(m)
+    ELSE  
+    JoinResp(m, allInstances[m].memberId) /\ UNCHANGED <<groupState, groupMembers, memberIdSeq, joinGroupCallback>>
+        
+allMemberJoined == \A m \in Consumers:joinGroupCallback[m] = TRUE    
+CompleteJoin == /\ Is(PrepareRebalance) /\ allMemberJoined
+/\ groupState' = CompletingRebalance /\ joinGroupCallback' = [m \in Consumers |-> FALSE] 
+/\ groupGeneration' = groupGeneration + 1 /\ (\A m \in Consumers : JoinResp(m, groupMembers[m])) 
+/\ UNCHANGED<<memberIdSeq, groupMembers>>
+
+Next ==  \E m \in Consumers:JoinReq(m) \/ CompleteJoin
 
 =============================================================================
 \* Modification History
-\* Last modified Mon Jun 17 17:10:10 PDT 2019 by boyang.chen
+\* Last modified Mon Jun 17 23:59:56 PDT 2019 by boyang.chen
 \* Created Mon Jun 10 22:20:01 PDT 2019 by boyang.chen
