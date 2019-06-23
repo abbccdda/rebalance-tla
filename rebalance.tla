@@ -21,6 +21,11 @@ ValidMemberStates == {Unjoined, Rebalancing, Stable, Fenced}
 ValidInstanceIds == {"ins1", "ins2", "ins3"}
 UNKNOWN_MEMBER_ID == 0
 
+UNKNOWN_MEMBER == "unknown_member"
+FENCED_INSTANCE == "fenced_instance"
+NO_ERROR == "no_error"
+Errors == {UNKNOWN_MEMBER, FENCED_INSTANCE}
+
 MemberInfo == [ memberId: 0..MaxId,
                 instanceId: ValidInstanceIds, 
                 state: ValidMemberStates,
@@ -61,8 +66,9 @@ VARIABLES groupState,
 
           allInstances,
           
-          joinGroupCallback \* registered join group callback
+          joinGroupCallback, \* registered join group callback
             
+          messages
 \*          syncGroupCallback \* registered sync group callback
 
 Is(state) == groupState = state
@@ -81,22 +87,38 @@ Init == /\ groupState = Empty
 doUnknownJoin(m) == /\ groupState' = PrepareRebalance /\ groupMembers' = [groupMembers EXCEPT ![m] = memberIdSeq] 
 /\ memberIdSeq' = memberIdSeq + 1 /\ joinGroupCallback' = [joinGroupCallback EXCEPT ![m] = TRUE] /\ UNCHANGED <<allInstances, groupGeneration>>    
 
-JoinResp(m, memberId) == allInstances' = [allInstances EXCEPT ![m] = [memberId |-> memberId, state |-> Rebalancing]] 
-    
-JoinReq(m) == IF (~Is(Dead) /\ ~IsKnownMember(m))
+joinOnFailure(m, memberId, error) == /\ error \in Errors /\ allInstances' = [allInstances EXCEPT ![m].state = Unjoined]
+
+joinOnSuccess(m, memberId) == allInstances' = [allInstances EXCEPT ![m] = [memberId |-> memberId, state |-> Stable]]
+
+JoinResp(m, memberId, error) == joinOnFailure(m, memberId, error) \/ joinOnSuccess(m, memberId)
+
+HandleJoinReq(m) == IF (~Is(Dead) /\ ~IsKnownMember(m))
     THEN doUnknownJoin(m)
     ELSE  
-    JoinResp(m, allInstances[m].memberId) /\ UNCHANGED <<groupState, groupMembers, memberIdSeq, joinGroupCallback>>
+    JoinResp(m, allInstances[m].memberId, NO_ERROR) /\ UNCHANGED <<groupState, groupMembers, memberIdSeq, joinGroupCallback>>
+    
+WithMessage(m, msgs) ==
+    IF m \in DOMAIN msgs THEN
+        [msgs EXCEPT ![m] = msgs[m] + 1]
+    ELSE
+         [msgs EXCEPT ![m] = 1]
+         
         
-allMemberJoined == \A m \in Consumers:joinGroupCallback[m] = TRUE    
+allMemberJoined == \A m \in Consumers:joinGroupCallback[m] = TRUE
+    
 CompleteJoin == /\ Is(PrepareRebalance) /\ allMemberJoined
 /\ groupState' = CompletingRebalance /\ joinGroupCallback' = [m \in Consumers |-> FALSE] 
-/\ groupGeneration' = groupGeneration + 1 /\ (\A m \in Consumers : JoinResp(m, groupMembers[m])) 
+/\ groupGeneration' = groupGeneration + 1 /\ (\A m \in Consumers : JoinResp(m, groupMembers[m], NO_ERROR)) 
 /\ UNCHANGED<<memberIdSeq, groupMembers>>
 
-Next ==  \E m \in Consumers:JoinReq(m) \/ CompleteJoin
+CompleteJoinTimeout == /\ Is(PrepareRebalance) /\ ~allMemberJoined /\ groupState' = CompletingRebalance 
+
+SessionTimeout(m) == /\ groupMembers[m] /= UNKNOWN_MEMBER_ID /\ allInstances' = [allInstances EXCEPT ![m].state = Unjoined] 
+
+Next ==  \E m \in Consumers: HandleJoinReq(m) \/ CompleteJoin \/ CompleteJoinTimeout
 
 =============================================================================
 \* Modification History
-\* Last modified Mon Jun 17 23:59:56 PDT 2019 by boyang.chen
+\* Last modified Sat Jun 22 21:36:26 PDT 2019 by boyang.chen
 \* Created Mon Jun 10 22:20:01 PDT 2019 by boyang.chen
